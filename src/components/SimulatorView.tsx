@@ -3,7 +3,7 @@ import { useStore } from '../store/useStore';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { FlightEnvironment } from './FlightEnvironment';
 import { PerspectiveCamera, OrbitControls } from '@react-three/drei';
-import { Maximize, Minimize, Camera, Sliders, MapPin, Layers } from 'lucide-react';
+import { Maximize, Minimize, Camera, Sliders, MapPin, Layers, Gauge, Target, RotateCcw } from 'lucide-react';
 import * as THREE from 'three';
 import { CustomTrackDesigner } from './CustomTrackDesigner';
 
@@ -83,6 +83,16 @@ export function SimulatorView() {
   const autonomousTrackType = useStore(state => state.autonomousTrackType);
   const setAutonomousTrackType = useStore(state => state.setAutonomousTrackType);
   const setIsTrackDesignerOpen = useStore(state => state.setIsTrackDesignerOpen);
+
+  // Speed & Shooting Score State
+  const speedMode = useStore(state => state.speedMode);
+  const setSpeedMode = useStore(state => state.setSpeedMode);
+  const shootingScore = useStore(state => state.shootingScore);
+  const targetsHit = useStore(state => state.targetsHit);
+  const shotsFired = useStore(state => state.shotsFired);
+  const bullseyeHits = useStore(state => state.bullseyeHits);
+  const resetShootingStats = useStore(state => state.resetShootingStats);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -140,19 +150,61 @@ export function SimulatorView() {
 
          {/* Independent Track Selector */}
          {mode === 'manual' ? (
-           <div className="flex items-center bg-slate-900/85 backdrop-blur rounded-full p-0.5 border border-slate-700/60 text-xs shadow-md">
-             <button
-               onClick={() => setPilotTrackType('slalom')}
-               className={`px-2.5 py-0.5 rounded-full transition-colors ${pilotTrackType === 'slalom' ? 'bg-indigo-600 text-white font-semibold' : 'text-slate-400 hover:text-white'}`}
-             >
-               Slalom Track
-             </button>
-             <button
-               onClick={() => setPilotTrackType('precision_rings')}
-               className={`px-2.5 py-0.5 rounded-full transition-colors ${pilotTrackType === 'precision_rings' ? 'bg-indigo-600 text-white font-semibold' : 'text-slate-400 hover:text-white'}`}
-             >
-               Precision Rings
-             </button>
+           <div className="flex items-center gap-2">
+             <div className="flex items-center bg-slate-900/85 backdrop-blur rounded-full p-0.5 border border-slate-700/60 text-xs shadow-md">
+               <button
+                 onClick={() => setPilotTrackType('slalom')}
+                 className={`px-2.5 py-0.5 rounded-full transition-colors ${pilotTrackType === 'slalom' ? 'bg-indigo-600 text-white font-semibold' : 'text-slate-400 hover:text-white'}`}
+               >
+                 Slalom
+               </button>
+               <button
+                 onClick={() => setPilotTrackType('precision_rings')}
+                 className={`px-2.5 py-0.5 rounded-full transition-colors ${pilotTrackType === 'precision_rings' ? 'bg-indigo-600 text-white font-semibold' : 'text-slate-400 hover:text-white'}`}
+               >
+                 Precision Rings
+               </button>
+               <button
+                 onClick={() => setPilotTrackType('target_shooting')}
+                 className={`px-2.5 py-0.5 rounded-full transition-colors flex items-center gap-1 ${pilotTrackType === 'target_shooting' ? 'bg-rose-600 text-white font-bold shadow-md shadow-rose-600/50' : 'text-rose-400 hover:text-rose-200'}`}
+               >
+                 <Target className="w-3 h-3" /> Target Range
+               </button>
+             </div>
+
+             {/* Speed Mode Toggle for Pilot Mode */}
+             <div className="flex items-center bg-slate-900/85 backdrop-blur rounded-full p-0.5 border border-slate-700/60 text-xs shadow-md">
+               <span className="pl-2 pr-1 text-[11px] font-semibold text-slate-300 flex items-center gap-1">
+                 <Gauge className="w-3.5 h-3.5 text-amber-400" /> Speed:
+               </span>
+               <button
+                 onClick={() => setSpeedMode('slow')}
+                 className={`px-2 py-0.5 rounded-full font-medium transition-all ${
+                   speedMode === 'slow' ? 'bg-emerald-600 text-white font-bold shadow' : 'text-slate-400 hover:text-white'
+                 }`}
+                 title="Slow Speed (45%) - Maximum hover stability and precision aiming"
+               >
+                 Slow [1]
+               </button>
+               <button
+                 onClick={() => setSpeedMode('normal')}
+                 className={`px-2 py-0.5 rounded-full font-medium transition-all ${
+                   speedMode === 'normal' ? 'bg-indigo-600 text-white font-bold shadow' : 'text-slate-400 hover:text-white'
+                 }`}
+                 title="Normal Speed (85%) - Standard balanced flight"
+               >
+                 Normal [2]
+               </button>
+               <button
+                 onClick={() => setSpeedMode('fast')}
+                 className={`px-2 py-0.5 rounded-full font-medium transition-all ${
+                   speedMode === 'fast' ? 'bg-amber-600 text-white font-bold shadow' : 'text-slate-400 hover:text-white'
+                 }`}
+                 title="Fast Speed (125%) - Sport speed and high agility"
+               >
+                 Fast [3]
+               </button>
+             </div>
            </div>
          ) : (
            <div className="flex items-center gap-2">
@@ -182,6 +234,34 @@ export function SimulatorView() {
            </div>
          )}
       </div>
+
+      {/* Target Shooting Scoreboard HUD (Top Center) */}
+      {mode === 'manual' && pilotTrackType === 'target_shooting' && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 bg-slate-900/90 backdrop-blur-md px-4 py-2 rounded-2xl border border-rose-500/30 shadow-xl shadow-rose-950/40 text-xs animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center gap-1.5 text-rose-400 font-bold tracking-wide uppercase">
+            <Target className="w-4 h-4 animate-pulse text-rose-500" /> Range Score
+          </div>
+          <div className="h-4 w-px bg-slate-700" />
+          <div className="flex items-center gap-3 font-mono">
+            <span className="text-white font-bold text-sm">
+              {shootingScore} <span className="text-[10px] text-slate-400 font-sans font-normal">pts</span>
+            </span>
+            <span className="text-amber-400 font-semibold">
+              {bullseyeHits} <span className="text-[10px] text-slate-400 font-sans font-normal">bullseyes</span>
+            </span>
+            <span className="text-emerald-400 font-semibold">
+              {targetsHit}/{shotsFired} <span className="text-[10px] text-slate-400 font-sans font-normal">hits ({shotsFired > 0 ? Math.round((targetsHit / shotsFired) * 100) : 0}%)</span>
+            </span>
+          </div>
+          <button 
+            onClick={resetShootingStats}
+            className="p-1 text-slate-400 hover:text-rose-300 hover:bg-rose-950/50 rounded-lg transition-colors"
+            title="Reset Shooting Score"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Overlay UI - Top Right: View Controls */}
       <div className="absolute top-4 right-4 flex gap-2 z-10">

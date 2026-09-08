@@ -1,6 +1,7 @@
 export type AppMode = 'manual' | 'autonomous';
 
-export type PilotTrackType = 'slalom' | 'precision_rings';
+export type PilotTrackType = 'slalom' | 'precision_rings' | 'target_shooting';
+export type DroneSpeedMode = 'slow' | 'normal' | 'fast';
 export type AutonomousTrackType = 'qr_pad' | 'custom';
 
 export type TrackElementType = 
@@ -64,4 +65,12 @@ export interface LeaderboardEntry {
   time: number;
   accuracy: number;
   mode: AppMode;
+}
+
+export interface GamepadMapping {
+  takeoff: number | null;
+  reset: number | null;
+  calibrate: number | null;
+  laser: number | null;
+  shoot: number | null;
 }

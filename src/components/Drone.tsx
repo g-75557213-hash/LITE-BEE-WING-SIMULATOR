@@ -1,12 +1,23 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useStore } from '../store/useStore';
 import { PerspectiveCamera } from '@react-three/drei';
 import { generateCollisionPillars } from '../utils/track';
 import { CargoCrate } from './ObstacleCourse';
+import { soundFX } from '../utils/audio';
+import { targetManager } from '../utils/targetSystem';
 
 const COLLISION_PILLARS = generateCollisionPillars();
+
+interface LaserProjectile {
+  id: number;
+  start: THREE.Vector3;
+  end: THREE.Vector3;
+  current: THREE.Vector3;
+  dir: THREE.Vector3;
+  progress: number;
+}
 
 export function Drone() {
   const groupRef = useRef<THREE.Group>(null);
@@ -18,6 +29,8 @@ export function Drone() {
   const gamepadTakeoffDebounce = useRef<number>(0);
   const gamepadResetDebounce = useRef<number>(0);
   const gamepadCalibrateDebounce = useRef<number>(0);
+  const gamepadShootDebounce = useRef<number>(0);
+  const gamepadLaserDebounce = useRef<number>(0);
   const calibStartRef = useRef<number>(0);
   const lastHit = useRef<number>(0);
   const lastPosSync = useRef<number>(0);
@@ -40,6 +53,14 @@ export function Drone() {
   const resetDrone = useStore(state => state.resetDrone);
   const hasCargo = useStore(state => state.hasCargo);
   const autoVelocity = useStore(state => state.autoVelocity);
+
+  // Speed Mode & Laser Weapons
+  const speedMode = useStore(state => state.speedMode);
+  const isLaserEnabled = useStore(state => state.isLaserEnabled);
+  const shootSignal = useStore(state => state.shootSignal);
+  const prevShootSignal = useRef(shootSignal);
+  const [muzzleFlash, setMuzzleFlash] = useState(false);
+  const [projectiles, setProjectiles] = useState<LaserProjectile[]>([]);
 
   // Manual Flight State
   const [keys, setKeys] = useState({
@@ -80,6 +101,40 @@ export function Drone() {
   }, [isFlying, mode]);
 
 
+  // Fire laser shot at current forward trajectory
+  const fireLaser = useCallback(() => {
+    if (!groupRef.current) return;
+    soundFX.playLaser();
+
+    // Trigger visual muzzle flash
+    setMuzzleFlash(true);
+    setTimeout(() => setMuzzleFlash(false), 90);
+
+    const droneQuat = groupRef.current.quaternion;
+    const forwardDir = new THREE.Vector3(0, 0, -1).applyQuaternion(droneQuat).normalize();
+    const emitterPos = groupRef.current.position.clone().add(
+      new THREE.Vector3(0, 0.04, -0.075).applyQuaternion(droneQuat)
+    );
+
+    // Test ray against target range targets
+    const hit = targetManager.testShot(emitterPos, forwardDir);
+    const targetEnd = hit
+      ? hit.hitPoint.clone()
+      : emitterPos.clone().add(forwardDir.clone().multiplyScalar(18));
+
+    setProjectiles(prev => [
+      ...prev.slice(-7),
+      {
+        id: Date.now() + Math.random(),
+        start: emitterPos.clone(),
+        end: targetEnd,
+        current: emitterPos.clone(),
+        dir: forwardDir.clone(),
+        progress: 0,
+      }
+    ]);
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key === ' ' ? 'Space' : e.key;
@@ -106,6 +161,29 @@ export function Drone() {
             store.setIsFlying(!store.isFlying);
          }
       }
+
+      // Shoot Laser
+      if (key === 'Space' || key.toLowerCase() === 'f') {
+         e.preventDefault();
+         const store = useStore.getState();
+         if (store.mode === 'manual' && store.health > 0) {
+            store.triggerShoot();
+         }
+      }
+
+      // Toggle Laser Beam Sight
+      if (key.toLowerCase() === 'l') {
+         useStore.getState().toggleLaser();
+      }
+
+      // Speed Mode toggles: 1 = Slow, 2 = Normal, 3 = Fast
+      if (key === '1') {
+         useStore.getState().setSpeedMode('slow');
+      } else if (key === '2') {
+         useStore.getState().setSpeedMode('normal');
+      } else if (key === '3') {
+         useStore.getState().setSpeedMode('fast');
+      }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
       const key = e.key === ' ' ? 'Space' : e.key;
@@ -122,10 +200,32 @@ export function Drone() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [isCalibrating, setIsCalibrating]);
+  }, [isCalibrating, setIsCalibrating, fireLaser]);
 
   useFrame((state, delta) => {
     if (!groupRef.current) return;
+
+    // Check for UI-triggered shoot
+    if (shootSignal !== prevShootSignal.current) {
+      prevShootSignal.current = shootSignal;
+      if (mode === 'manual' && health > 0) {
+        fireLaser();
+      }
+    }
+
+    // Update active laser projectiles
+    if (projectiles.length > 0) {
+      setProjectiles(prev => 
+        prev
+          .map(p => {
+            const nextProg = p.progress + delta * 6.5;
+            if (nextProg >= 1.0) return null;
+            const current = p.start.clone().lerp(p.end, nextProg);
+            return { ...p, progress: nextProg, current };
+          })
+          .filter((p): p is LaserProjectile => p !== null)
+      );
+    }
     
     let targetPitch = 0;
     let targetRoll = 0;
@@ -134,11 +234,29 @@ export function Drone() {
     if (mode === 'manual') {
       const pos = groupRef.current.position;
       
-      // Physics Constants - Highly sensitive and responsive for gamepad & keyboard
-      const ACCEL = 14 * delta; 
-      const MAX_SPEED = 3.2; 
-      const TURN_SPEED = 2.8 * delta; 
-      const DRAG = 0.98;
+      // Speed Mode Multipliers - Allows beginner/precision training or full sport speed
+      let speedFactor = 0.85;
+      let turnFactor = 0.95;
+      let maxSpeedVal = 2.8;
+      let dragVal = 0.98;
+
+      if (speedMode === 'slow') {
+        speedFactor = 0.45;
+        turnFactor = 0.65;
+        maxSpeedVal = 1.4;
+        dragVal = 0.93; // Crisp stopping power for aiming at targets
+      } else if (speedMode === 'fast') {
+        speedFactor = 1.25;
+        turnFactor = 1.25;
+        maxSpeedVal = 3.8;
+        dragVal = 0.985;
+      }
+
+      // Physics Constants dynamically scaled
+      const ACCEL = (14 * speedFactor) * delta; 
+      const MAX_SPEED = maxSpeedVal; 
+      const TURN_SPEED = (2.8 * turnFactor) * delta; 
+      const DRAG = dragVal;
 
       let dRotY = 0;
       let dThrottle = 0;
@@ -148,6 +266,28 @@ export function Drone() {
 
       if (gp) {
         const deadzone = 0.08;
+
+        // Gamepad Shoot: mapped button (default 5 RB) or fallbacks (5, 7)
+        const isShootPressed = 
+          (gamepadMapping.shoot !== null && gp.buttons[gamepadMapping.shoot]?.pressed) ||
+          (gamepadMapping.shoot === null && (gp.buttons[5]?.pressed || gp.buttons[7]?.pressed));
+        if (isShootPressed && health > 0 && mode === 'manual') {
+          if (Date.now() - gamepadShootDebounce.current > 200) {
+            gamepadShootDebounce.current = Date.now();
+            useStore.getState().triggerShoot();
+          }
+        }
+
+        // Gamepad Laser Toggle: mapped button (default 4 LB) or fallbacks (4, 3)
+        const isLaserTogglePressed = 
+          (gamepadMapping.laser !== null && gp.buttons[gamepadMapping.laser]?.pressed) ||
+          (gamepadMapping.laser === null && (gp.buttons[4]?.pressed || gp.buttons[3]?.pressed));
+        if (isLaserTogglePressed && mode === 'manual') {
+          if (Date.now() - gamepadLaserDebounce.current > 400) {
+            gamepadLaserDebounce.current = Date.now();
+            useStore.getState().toggleLaser();
+          }
+        }
         
         // Gamepad Reset: Works REGARDLESS of health (even when crashed!), debounced 400ms
         const isResetPressed = 
@@ -390,7 +530,8 @@ export function Drone() {
   });
 
   return (
-    <group ref={groupRef} castShadow>
+    <>
+      <group ref={groupRef} castShadow>
       {mode === 'manual' && useStore.getState().cameraView === 'tpp' && <PerspectiveCamera makeDefault ref={cameraRef} fov={60} />}
       
       {/* Attached Cargo under drone belly */}
@@ -415,10 +556,61 @@ export function Drone() {
           <meshStandardMaterial color="#9ca3af" roughness={0.7} />
         </mesh>
         
+        {/* Front-facing Optical Sensor */}
         <mesh position={[0, 0.04, 0.07]} rotation={[Math.PI/2, 0, 0]}>
           <cylinderGeometry args={[0.01, 0.01, 0.01, 16]} />
           <meshStandardMaterial color="#111111" />
         </mesh>
+
+        {/* Front Laser Emitter Module (Manual Mode) */}
+        {mode === 'manual' && (
+          <group position={[0, 0.04, -0.075]}>
+            {/* Metal Laser Housing Collar */}
+            <mesh position={[0, 0, -0.005]} rotation={[Math.PI / 2, 0, 0]}>
+              <cylinderGeometry args={[0.009, 0.012, 0.014, 16]} />
+              <meshStandardMaterial color="#0f172a" metalness={0.9} roughness={0.1} />
+            </mesh>
+
+            {/* Glowing Laser Diode Lens */}
+            <mesh position={[0, 0, -0.013]} rotation={[Math.PI / 2, 0, 0]}>
+              <cylinderGeometry args={[0.005, 0.005, 0.003, 16]} />
+              <meshBasicMaterial color={isLaserEnabled ? '#ef4444' : '#475569'} />
+            </mesh>
+
+            {/* Collimated Laser Beam (Active when laser enabled) */}
+            {isLaserEnabled && (
+              <group>
+                {/* Outer Red Laser Aura */}
+                <mesh position={[0, 0, -8]} rotation={[Math.PI / 2, 0, 0]}>
+                  <cylinderGeometry args={[0.0035, 0.0035, 16, 12]} />
+                  <meshBasicMaterial color="#ff0033" transparent opacity={0.65} />
+                </mesh>
+                {/* Intense Hot Core */}
+                <mesh position={[0, 0, -8]} rotation={[Math.PI / 2, 0, 0]}>
+                  <cylinderGeometry args={[0.0014, 0.0014, 16, 8]} />
+                  <meshBasicMaterial color="#ffffff" transparent opacity={0.9} />
+                </mesh>
+                {/* Terminal Aiming Reticle Dot at end of beam */}
+                <mesh position={[0, 0, -16]}>
+                  <circleGeometry args={[0.045, 16]} />
+                  <meshBasicMaterial color="#ff0033" transparent opacity={0.8} />
+                </mesh>
+                <pointLight position={[0, 0, -0.02]} color="#ff0033" intensity={1.8} distance={1.2} />
+              </group>
+            )}
+
+            {/* Muzzle Flash during laser shot */}
+            {muzzleFlash && (
+              <group position={[0, 0, -0.03]}>
+                <mesh>
+                  <sphereGeometry args={[0.05, 16, 16]} />
+                  <meshBasicMaterial color="#fef08a" />
+                </mesh>
+                <pointLight color="#f43f5e" intensity={5} distance={3} />
+              </group>
+            )}
+          </group>
+        )}
         
         {isCalibrating && (
            <group position={[0, 0.08, 0]}>
@@ -463,5 +655,23 @@ export function Drone() {
         ))}
       </group>
     </group>
-  );
+
+    {/* Laser Projectile Blasts in World Space */}
+    {projectiles.map((p) => (
+      <group key={p.id} position={[p.current.x, p.current.y, p.current.z]}>
+        {/* Glowing Head */}
+        <mesh>
+          <sphereGeometry args={[0.035, 12, 12]} />
+          <meshBasicMaterial color="#ffffff" />
+        </mesh>
+        {/* Plasma Trail */}
+        <mesh position={[-p.dir.x * 0.08, -p.dir.y * 0.08, -p.dir.z * 0.08]}>
+          <sphereGeometry args={[0.045, 12, 12]} />
+          <meshBasicMaterial color="#ef4444" transparent opacity={0.8} />
+        </mesh>
+        <pointLight color="#ef4444" intensity={2.5} distance={1.8} />
+      </group>
+    ))}
+  </>
+);
 }

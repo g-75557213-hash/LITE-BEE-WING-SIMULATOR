@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { AppMode, CodeBlock, Analytics, PilotTrackType, AutonomousTrackType, TrackElement } from '../types';
+import { AppMode, CodeBlock, Analytics, PilotTrackType, AutonomousTrackType, TrackElement, DroneSpeedMode, GamepadMapping } from '../types';
 
 export type CameraView = 'tpp' | 'free';
 
@@ -14,10 +14,14 @@ export const DEFAULT_CUSTOM_TRACK_ELEMENTS: TrackElement[] = [
 
 function getStartingCoordinates(
   mode: AppMode,
+  pilotTrackType: PilotTrackType,
   autonomousTrackType: AutonomousTrackType,
   customElements: TrackElement[]
 ): [number, number, number] {
   if (mode === 'manual') {
+    if (pilotTrackType === 'target_shooting') {
+      return [0, 0, 5.5];
+    }
     return [-4, 0, 6];
   }
   if (autonomousTrackType === 'custom') {
@@ -52,6 +56,23 @@ interface AppState {
   setHealth: (health: number) => void;
   resetSignal: number;
   resetDrone: () => void;
+
+  // Speed Mode (Pilot sensitivity & speed control)
+  speedMode: DroneSpeedMode;
+  setSpeedMode: (mode: DroneSpeedMode) => void;
+
+  // Laser Sight & Shooting
+  isLaserEnabled: boolean;
+  setIsLaserEnabled: (enabled: boolean) => void;
+  toggleLaser: () => void;
+  shootSignal: number;
+  triggerShoot: () => void;
+  shootingScore: number;
+  shotsFired: number;
+  targetsHit: number;
+  bullseyeHits: number;
+  recordHit: (points: number, isBullseye: boolean) => void;
+  resetShootingStats: () => void;
   
   // Autonomous Motion Dynamics (Smooth & Continuous LiteBee Wing)
   targetAltitude: number;
@@ -86,14 +107,17 @@ interface AppState {
   // Gamepad & Controls
   controlMode: 1 | 2;
   setControlMode: (mode: 1 | 2) => void;
-  gamepadMapping: { takeoff: number | null, reset: number | null, calibrate: number | null };
-  setGamepadMapping: (mapping: { takeoff: number | null, reset: number | null, calibrate: number | null }) => void;
+  gamepadMapping: GamepadMapping;
+  setGamepadMapping: (mapping: GamepadMapping) => void;
   isCalibrating: boolean;
   setIsCalibrating: (calibrating: boolean) => void;
 
   // Independent Track Settings
   pilotTrackType: PilotTrackType;
   setPilotTrackType: (type: PilotTrackType) => void;
+  clearedRings: number[];
+  clearRing: (ringId: number) => void;
+  resetRings: () => void;
   autonomousTrackType: AutonomousTrackType;
   setAutonomousTrackType: (type: AutonomousTrackType) => void;
   customTrackElements: TrackElement[];
@@ -106,7 +130,7 @@ export const useStore = create<AppState>((set, get) => ({
   mode: 'manual',
   setMode: (mode) => {
     const state = get();
-    const startPos = getStartingCoordinates(mode, state.autonomousTrackType, state.customTrackElements);
+    const startPos = getStartingCoordinates(mode, state.pilotTrackType, state.autonomousTrackType, state.customTrackElements);
     set({
       mode,
       isRunning: false,
@@ -139,6 +163,35 @@ export const useStore = create<AppState>((set, get) => ({
   setIsFlying: (isFlying) => set({ isFlying }),
   health: 100,
   setHealth: (health) => set({ health }),
+
+  // Speed Mode
+  speedMode: 'normal',
+  setSpeedMode: (speedMode) => set({ speedMode }),
+
+  // Laser Sight & Shooting
+  isLaserEnabled: true,
+  setIsLaserEnabled: (isLaserEnabled) => set({ isLaserEnabled }),
+  toggleLaser: () => set(state => ({ isLaserEnabled: !state.isLaserEnabled })),
+  shootSignal: 0,
+  triggerShoot: () => set(state => ({ 
+    shootSignal: state.shootSignal + 1,
+    shotsFired: state.shotsFired + 1 
+  })),
+  shootingScore: 0,
+  shotsFired: 0,
+  targetsHit: 0,
+  bullseyeHits: 0,
+  recordHit: (points, isBullseye) => set(state => ({
+    shootingScore: state.shootingScore + points,
+    targetsHit: state.targetsHit + 1,
+    bullseyeHits: isBullseye ? state.bullseyeHits + 1 : state.bullseyeHits
+  })),
+  resetShootingStats: () => set({
+    shootingScore: 0,
+    shotsFired: 0,
+    targetsHit: 0,
+    bullseyeHits: 0
+  }),
   
   targetAltitude: 0,
   setTargetAltitude: (targetAltitude) => set({ targetAltitude }),
@@ -147,7 +200,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   resetSignal: 0,
   resetDrone: () => set(state => {
-    const startPos = getStartingCoordinates(state.mode, state.autonomousTrackType, state.customTrackElements);
+    const startPos = getStartingCoordinates(state.mode, state.pilotTrackType, state.autonomousTrackType, state.customTrackElements);
     return { 
       targetPosition: startPos, 
       targetRotation: [0, 0, 0], 
@@ -159,6 +212,7 @@ export const useStore = create<AppState>((set, get) => ({
       isFlying: false,
       isRunning: false,
       autoVelocity: { forward: 0, right: 0, up: 0 },
+      clearedRings: [],
       resetSignal: state.resetSignal + 1
     };
   }),
@@ -224,8 +278,8 @@ export const useStore = create<AppState>((set, get) => ({
   
   controlMode: 1,
   setControlMode: (controlMode) => set({ controlMode }),
-  // Default fallback mappings: takeoff: button 0 (A/Cross), reset: button 8 (Back/Select) or button 9 (Start), calibrate: button 1 (B/Circle)
-  gamepadMapping: { takeoff: 0, reset: 8, calibrate: 1 },
+  // Default mappings: takeoff: button 0 (A/Cross), reset: button 8 (Back/Select), calibrate: button 1 (B/Circle), laser: button 4 (LB/L1), shoot: button 5 (RB/R1)
+  gamepadMapping: { takeoff: 0, reset: 8, calibrate: 1, laser: 4, shoot: 5 },
   setGamepadMapping: (mapping) => set({ gamepadMapping: mapping }),
   isCalibrating: false,
   setIsCalibrating: (isCalibrating) => set({ isCalibrating }),
@@ -233,9 +287,15 @@ export const useStore = create<AppState>((set, get) => ({
   // Independent Tracks
   pilotTrackType: 'slalom',
   setPilotTrackType: (pilotTrackType) => {
-    set({ pilotTrackType });
+    set({ pilotTrackType, clearedRings: [] });
     get().resetDrone();
   },
+  clearedRings: [],
+  clearRing: (ringId) => set(state => {
+    if (state.clearedRings.includes(ringId)) return state;
+    return { clearedRings: [...state.clearedRings, ringId] };
+  }),
+  resetRings: () => set({ clearedRings: [] }),
 
   autonomousTrackType: 'qr_pad',
   setAutonomousTrackType: (autonomousTrackType) => {

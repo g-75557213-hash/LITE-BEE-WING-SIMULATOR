@@ -1,8 +1,9 @@
 import React from 'react';
 import * as THREE from 'three';
 import { useStore } from '../store/useStore';
-import { TRACK_OBSTACLES } from '../utils/track';
+import { TRACK_OBSTACLES, PRECISION_RINGS } from '../utils/track';
 import { Text } from '@react-three/drei';
+import { TargetShootingTrack } from './TargetShootingTrack';
 
 export function ObstacleCourse() {
   const mode = useStore(state => state.mode);
@@ -46,6 +47,7 @@ export function ObstacleCourse() {
         <>
           {pilotTrackType === 'slalom' && <UnifiedTrack />}
           {pilotTrackType === 'precision_rings' && <PrecisionRingsTrack />}
+          {pilotTrackType === 'target_shooting' && <TargetShootingTrack />}
         </>
       )}
 
@@ -61,40 +63,110 @@ export function ObstacleCourse() {
 }
 
 function PrecisionRingsTrack() {
-  const rings = [
-    { pos: [-4, 1.2, 3] as [number, number, number], rot: [0, 0, 0] as [number, number, number], color: '#38bdf8' },
-    { pos: [-4, 1.5, -2] as [number, number, number], rot: [0, 0, 0] as [number, number, number], color: '#a855f7' },
-    { pos: [0, 1.8, -5] as [number, number, number], rot: [0, Math.PI / 2, 0] as [number, number, number], color: '#ec4899' },
-    { pos: [4, 1.4, -2] as [number, number, number], rot: [0, 0, 0] as [number, number, number], color: '#10b981' },
-    { pos: [4, 1.1, 3] as [number, number, number], rot: [0, 0, 0] as [number, number, number], color: '#f59e0b' },
-  ];
+  const clearedRings = useStore(state => state.clearedRings);
+
+  // Flight path waypoints connecting takeoff -> rings 1-5 -> landing pad
+  const flightPathPoints = React.useMemo(() => [
+    -4, 0.2, 6,
+    -4, 1.2, 3,
+    -4, 1.5, -2,
+    0, 1.8, -5,
+    4, 1.4, -2,
+    4, 1.1, 3,
+    2, 0.2, 6,
+  ], []);
 
   return (
     <group>
       <Pad position={[-4, 0.03, 6]} color="#ef4444" label="Take Off" />
       <LandingPad position={[2, 0.03, 6]} />
 
-      {rings.map((ring, idx) => (
-        <group key={idx} position={ring.pos} rotation={ring.rot}>
-          <mesh position={[0, -ring.pos[1] / 2, 0]}>
-            <cylinderGeometry args={[0.03, 0.04, ring.pos[1], 16]} />
-            <meshStandardMaterial color="#475569" metalness={0.7} />
-          </mesh>
-          <mesh rotation={[0, 0, 0]}>
-            <torusGeometry args={[0.65, 0.04, 16, 32]} />
-            <meshStandardMaterial color={ring.color} emissive={ring.color} emissiveIntensity={0.6} />
-          </mesh>
-          <Text
-            position={[0, 0.85, 0]}
-            fontSize={0.25}
-            color="#ffffff"
-            anchorX="center"
-            anchorY="middle"
-          >
-            {`GATE ${idx + 1}`}
-          </Text>
-        </group>
-      ))}
+      {/* Guide Flight Corridor Path */}
+      <line>
+        <bufferGeometry>
+          <bufferAttribute
+            attach="attributes-position"
+            count={7}
+            array={new Float32Array(flightPathPoints)}
+            itemSize={3}
+          />
+        </bufferGeometry>
+        <lineBasicMaterial color="#818cf8" transparent opacity={0.35} />
+      </line>
+
+      {PRECISION_RINGS.map((ring) => {
+        const isCleared = clearedRings.includes(ring.id);
+        const [, cy] = ring.pos;
+        const R = ring.radius;
+        const rTube = ring.tubeRadius;
+        
+        // Pole extends from ground y=0 strictly to the bottom rim of the ring.
+        // The central aperture hole of the ring is completely OPEN and unblocked!
+        const poleHeight = Math.max(0.1, cy - R + rTube * 0.5);
+        const poleCenterY = -cy + (poleHeight / 2);
+
+        return (
+          <group key={ring.id} position={ring.pos} rotation={ring.rot}>
+            {/* Ground Base Stand */}
+            <mesh position={[0, -cy + 0.02, 0]}>
+              <cylinderGeometry args={[0.26, 0.32, 0.04, 24]} />
+              <meshStandardMaterial color="#1e293b" metalness={0.8} roughness={0.25} />
+            </mesh>
+            <mesh position={[0, -cy + 0.05, 0]}>
+              <cylinderGeometry args={[0.08, 0.12, 0.04, 16]} />
+              <meshStandardMaterial color="#475569" metalness={0.7} />
+            </mesh>
+
+            {/* Vertical Support Pole (ONLY below the bottom rim of the ring - hole is 100% CLEAR!) */}
+            <mesh position={[0, poleCenterY, 0]}>
+              <cylinderGeometry args={[0.035, 0.04, poleHeight, 16]} />
+              <meshStandardMaterial color="#475569" metalness={0.75} roughness={0.3} />
+            </mesh>
+
+            {/* Precision Torus Ring */}
+            <mesh rotation={[0, 0, 0]}>
+              <torusGeometry args={[R, rTube, 20, 48]} />
+              <meshStandardMaterial 
+                color={isCleared ? '#10b981' : ring.color} 
+                emissive={isCleared ? '#10b981' : ring.color} 
+                emissiveIntensity={isCleared ? 0.9 : 0.55} 
+                metalness={0.7} 
+                roughness={0.2} 
+              />
+            </mesh>
+
+            {/* 4 LED Navigation Beacons on Ring Rim */}
+            {[
+              [0, R, 0],
+              [0, -R + rTube, 0],
+              [R, 0, 0],
+              [-R, 0, 0],
+            ].map((pos, i) => (
+              <mesh key={i} position={pos as [number, number, number]}>
+                <sphereGeometry args={[0.035, 12, 12]} />
+                <meshBasicMaterial color={isCleared ? '#34d399' : '#ffffff'} />
+              </mesh>
+            ))}
+
+            {/* Gate Number & Status Banner */}
+            <group position={[0, R + 0.22, 0]}>
+              <mesh position={[0, 0, -0.01]}>
+                <planeGeometry args={[0.85, 0.24]} />
+                <meshBasicMaterial color={isCleared ? '#064e3b' : '#0f172a'} transparent opacity={0.85} />
+              </mesh>
+              <Text
+                position={[0, 0, 0]}
+                fontSize={0.15}
+                color={isCleared ? '#34d399' : '#ffffff'}
+                anchorX="center"
+                anchorY="middle"
+              >
+                {isCleared ? `GATE ${ring.id} ✓` : `GATE ${ring.id}`}
+              </Text>
+            </group>
+          </group>
+        );
+      })}
     </group>
   );
 }
