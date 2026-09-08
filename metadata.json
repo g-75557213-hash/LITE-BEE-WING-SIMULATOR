@@ -1,0 +1,6 @@
+{
+  "name": "LiteBee Wing Simulator",
+  "description": "A dual-mode flight simulator and block coding environment for LiteBee Wing drones, featuring flight dynamics, an obstacle course, and logic programming.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
