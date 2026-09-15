@@ -3,7 +3,7 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useStore } from '../store/useStore';
 import { PerspectiveCamera } from '@react-three/drei';
-import { generateCollisionPillars } from '../utils/track';
+import { generateCollisionPillars, checkTrackCollision, checkRingPassed, PRECISION_RINGS } from '../utils/track';
 import { CargoCrate } from './ObstacleCourse';
 import { soundFX } from '../utils/audio';
 import { targetManager } from '../utils/targetSystem';
@@ -69,14 +69,12 @@ export function Drone() {
   });
 
   const checkCollision = (pos: THREE.Vector3) => {
-      const droneRadius = 0.15;
-      for (const pillar of COLLISION_PILLARS) {
-         const dist = Math.hypot(pos.x - pillar.x, pos.z - pillar.z);
-         if (dist < droneRadius + pillar.radius && pos.y < pillar.height) {
-            return true;
-         }
-      }
-      return false;
+      const store = useStore.getState();
+      return checkTrackCollision(
+          { x: pos.x, y: pos.y, z: pos.z }, 
+          store.pilotTrackType, 
+          0.15
+      );
   };
 
   // Watch for Reset Signal - Position drone dynamically based on current mode & track start
@@ -426,6 +424,16 @@ export function Drone() {
               lastHit.current = Date.now();
               if (newHealth <= 0) {
                   updateAnalytics({ crashes: useStore.getState().analytics.crashes + 1 });
+              }
+          }
+      }
+
+      // Check Precision Rings pass-through
+      if (mode === 'manual' && useStore.getState().pilotTrackType === 'precision_rings') {
+          for (const ring of PRECISION_RINGS) {
+              if (checkRingPassed(pos, nextPos, ring)) {
+                  useStore.getState().clearRing(ring.id);
+                  soundFX.playSuccess();
               }
           }
       }

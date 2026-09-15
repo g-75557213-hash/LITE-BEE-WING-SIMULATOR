@@ -7,12 +7,34 @@ import { Maximize, Minimize, Camera, Sliders, MapPin, Layers, Gauge, Target, Rot
 import * as THREE from 'three';
 import { CustomTrackDesigner } from './CustomTrackDesigner';
 
-function GamepadCameraController() {
+function FreeCameraController() {
   const { camera, controls } = useThree();
   const targetOffset = useRef(new THREE.Vector3(0, 0, 0));
-  const baseTarget = useStore(state => state.targetPosition);
+  const prevBaseTarget = useRef(new THREE.Vector3());
+  const isInitialized = useRef(false);
 
   useFrame((state, delta) => {
+    const storeTarget = useStore.getState().targetPosition;
+    const baseTarget = new THREE.Vector3(storeTarget[0], storeTarget[1], storeTarget[2]);
+
+    if (!isInitialized.current) {
+      camera.position.set(baseTarget.x, baseTarget.y + 3, baseTarget.z + 4);
+      if (controls) {
+        (controls as any).target.copy(baseTarget);
+      }
+      prevBaseTarget.current.copy(baseTarget);
+      isInitialized.current = true;
+      return;
+    }
+
+    const targetDelta = new THREE.Vector3().subVectors(baseTarget, prevBaseTarget.current);
+    
+    if (targetDelta.lengthSq() > 0) {
+      // Follow the drone by translating the camera
+      camera.position.add(targetDelta);
+      prevBaseTarget.current.copy(baseTarget);
+    }
+
     const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
     const gp = gamepads.find(g => g !== null);
     
@@ -26,55 +48,46 @@ function GamepadCameraController() {
        if (gp.buttons[13]?.pressed) panZ += 5 * delta;
        if (gp.buttons[14]?.pressed) panX -= 5 * delta;
        if (gp.buttons[15]?.pressed) panX += 5 * delta;
-
        // L1 (Button 4) Zoom in, L2 (Button 6) Zoom out
        if (gp.buttons[4]?.pressed) zoomDelta -= 10 * delta;
        if (gp.buttons[6]?.pressed) zoomDelta += 10 * delta;
        
-       // Update offset based on D-pad relative to camera view
        if (panX !== 0 || panZ !== 0) {
            const forward = new THREE.Vector3();
            camera.getWorldDirection(forward);
            forward.y = 0;
            forward.normalize();
-           
            const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
-           
            targetOffset.current.add(right.multiplyScalar(panX));
            targetOffset.current.add(forward.multiplyScalar(-panZ));
        }
        
-       // Apply Zoom
        if (zoomDelta !== 0) {
            camera.position.add(camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(zoomDelta));
        }
-
-       // Update orbit controls target
+    }
+    
+    if (controls) {
        const orbitControls = controls as any;
-       orbitControls.target.set(
-           baseTarget[0] + targetOffset.current.x,
-           baseTarget[1] + targetOffset.current.y,
-           baseTarget[2] + targetOffset.current.z
-       );
-       orbitControls.update();
-    } else if (controls) {
-       // Reset offset if no gamepad to default tracking
-       // or keep it? We'll keep the current offset so they don't snap back.
-       const orbitControls = controls as any;
-       orbitControls.target.set(
-           baseTarget[0] + targetOffset.current.x,
-           baseTarget[1] + targetOffset.current.y,
-           baseTarget[2] + targetOffset.current.z
-       );
+       // We only want to translate the target, not aggressively set it, so orbit/pan are preserved
+       orbitControls.target.add(targetDelta);
     }
   });
   
   return null;
 }
 
+function HUDAltitude() {
+  const targetPosition = useStore(state => state.targetPosition);
+  return (
+    <div className="bg-slate-900/85 backdrop-blur px-3 py-1 rounded-full text-xs font-semibold text-slate-200 shadow-md border border-slate-700/60">
+       Alt: <span className="font-mono text-emerald-400">{targetPosition[1].toFixed(2)}m</span>
+    </div>
+  );
+}
+
 export function SimulatorView() {
   const mode = useStore(state => state.mode);
-  const targetPosition = useStore(state => state.targetPosition);
   const health = useStore(state => state.health);
   const cameraView = useStore(state => state.cameraView);
   const setCameraView = useStore(state => state.setCameraView);
@@ -115,19 +128,17 @@ export function SimulatorView() {
            <>
              <PerspectiveCamera 
                  makeDefault 
-                 position={[targetPosition[0], targetPosition[1] + 3, targetPosition[2] + 4]} 
-                 rotation={[0, Math.PI, 0]} 
                  fov={60}
              />
              <OrbitControls 
-                 target={[targetPosition[0], targetPosition[1], targetPosition[2]]}
                  enableDamping
                  dampingFactor={0.05}
                  maxPolarAngle={Math.PI / 2 - 0.05} // don't go below ground
                  enablePan={true}
-                 enableZoom={true} maxDistance={15}
+                 enableZoom={true} 
+                 maxDistance={15}
              />
-             {cameraView === 'free' && <GamepadCameraController />}
+             <FreeCameraController />
            </>
          )}
          <FlightEnvironment />
@@ -138,9 +149,7 @@ export function SimulatorView() {
          <div className="bg-slate-900/85 backdrop-blur px-3 py-1 rounded-full text-xs font-semibold text-slate-200 shadow-md border border-slate-700/60">
             Mode: <span className={mode === 'manual' ? 'text-indigo-400 uppercase font-bold' : 'text-purple-400 uppercase font-bold'}>{mode}</span>
          </div>
-         <div className="bg-slate-900/85 backdrop-blur px-3 py-1 rounded-full text-xs font-semibold text-slate-200 shadow-md border border-slate-700/60">
-            Alt: <span className="font-mono text-emerald-400">{targetPosition[1].toFixed(2)}m</span>
-         </div>
+         <HUDAltitude />
          <div className="bg-slate-900/85 backdrop-blur px-3 py-1 rounded-full text-xs font-semibold text-slate-200 shadow-md border border-slate-700/60 flex items-center gap-1.5">
             <span>Health:</span>
             <div className="w-16 h-2 bg-slate-800 rounded-full overflow-hidden">

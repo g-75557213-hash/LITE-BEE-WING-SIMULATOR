@@ -298,8 +298,8 @@ export function InstructionsPanel() {
       {/* Gamepad Setup Modal */}
       {showGamepadModal && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
-           <div className="bg-white w-full max-w-sm rounded-2xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-              <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+           <div className="bg-white w-full max-w-sm max-h-[90vh] flex flex-col rounded-2xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+              <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between bg-slate-50 shrink-0">
                  <h3 className="font-bold text-slate-800 flex items-center gap-2">
                     <Gamepad2 className="w-5 h-5 text-indigo-500" /> Controller Setup
                  </h3>
@@ -307,7 +307,7 @@ export function InstructionsPanel() {
                     <X className="w-5 h-5" />
                  </button>
               </div>
-              <div className="p-6 space-y-4">
+              <div className="p-6 space-y-4 overflow-y-auto">
                  <p className="text-sm text-slate-500 leading-relaxed">
                    Connect a controller to map specific actions to your controller buttons. Ensure the controller is powered on and connected to your device.
                  </p>
